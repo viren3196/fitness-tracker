@@ -244,6 +244,127 @@ function renderBreakdown() {
   return html;
 }
 
+// ── Chart Renderers ──
+function renderProgressRing(weekCount) {
+  const r = 62;
+  const circ = 2 * Math.PI * r;
+  const pct = Math.min(weekCount / 7, 1);
+  const offset = circ * (1 - pct);
+  const color = weekCount >= 5 ? '#06d6a0' : weekCount >= 3 ? '#4361ee' : '#f97316';
+  const glowColor = color + '40';
+
+  return `
+    <div class="ring-container">
+      <svg viewBox="0 0 150 150">
+        <defs>
+          <filter id="ring-glow"><feGaussianBlur stdDeviation="4" result="glow"/><feMerge><feMergeNode in="glow"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+        </defs>
+        <circle class="ring-track" cx="75" cy="75" r="${r}"/>
+        <circle class="ring-fill" cx="75" cy="75" r="${r}"
+          stroke="${color}" filter="${pct > 0 ? 'url(#ring-glow)' : ''}"
+          stroke-dasharray="${circ}" stroke-dashoffset="${offset}"/>
+      </svg>
+      <div class="ring-center">
+        <div class="ring-value">${weekCount}<span class="ring-sub">/7</span></div>
+        <div class="ring-label">days this week</div>
+      </div>
+    </div>`;
+}
+
+function renderWeeklyBars() {
+  const now = new Date();
+  const mon = getMonday(now);
+  const todayStr = toDateStr(now);
+  const labels = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+
+  const dayData = [];
+  let maxCount = 1;
+
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(mon);
+    d.setDate(d.getDate() + i);
+    const ds = toDateStr(d);
+    const dayW = workouts.filter(w => w.date === ds);
+    const typeCounts = {};
+    dayW.forEach(w => { typeCounts[w.type] = (typeCounts[w.type] || 0) + 1; });
+    const total = dayW.length;
+    if (total > maxCount) maxCount = total;
+    dayData.push({ label: labels[i], date: ds, isToday: ds === todayStr, isFuture: ds > todayStr, typeCounts, total });
+  }
+
+  let html = '<div class="bar-chart"><div class="bar-chart-grid">';
+  dayData.forEach(day => {
+    let stackHtml = '';
+    if (day.total > 0) {
+      Object.entries(day.typeCounts).forEach(([type, count]) => {
+        const segPct = (count / maxCount) * 100;
+        const m = activityMeta(type);
+        stackHtml += `<div class="bar-segment" style="height:${segPct}%;background:${m.color}"></div>`;
+      });
+    } else if (!day.isFuture) {
+      stackHtml = '<div class="bar-placeholder"></div>';
+    }
+
+    html += `
+      <div class="bar-col ${day.isToday ? 'is-today' : ''} ${day.isFuture ? 'future' : ''}">
+        <div class="bar-stack">${stackHtml}</div>
+        <span class="bar-label">${day.label}</span>
+      </div>`;
+  });
+  html += '</div></div>';
+  return html;
+}
+
+function renderDonutChart() {
+  if (!workouts.length) return '';
+
+  const counts = {};
+  workouts.forEach(w => { counts[w.type] = (counts[w.type] || 0) + 1; });
+  const total = workouts.length;
+  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+
+  const r = 42;
+  const circ = 2 * Math.PI * r;
+  let cumOffset = 0;
+
+  let segs = '';
+  sorted.forEach(([type, count]) => {
+    const m = activityMeta(type);
+    const dashLen = circ * (count / total);
+    const gapLen = circ - dashLen;
+    segs += `<circle class="donut-segment" cx="60" cy="60" r="${r}"
+      stroke="${m.color}" stroke-dasharray="${dashLen} ${gapLen}" stroke-dashoffset="${-cumOffset}"/>`;
+    cumOffset += dashLen;
+  });
+
+  let legend = '';
+  sorted.forEach(([type, count]) => {
+    const m = activityMeta(type);
+    const pct = Math.round((count / total) * 100);
+    legend += `
+      <div class="donut-legend-item">
+        <span class="donut-legend-dot" style="background:${m.color}"></span>
+        <span class="donut-legend-label">${m.label}</span>
+        <span class="donut-legend-value">${pct}%</span>
+      </div>`;
+  });
+
+  return `
+    <div class="donut-section">
+      <div class="donut-container">
+        <svg viewBox="0 0 120 120">
+          <circle class="donut-track" cx="60" cy="60" r="${r}"/>
+          ${segs}
+        </svg>
+        <div class="donut-center-text">
+          <div class="donut-total">${total}</div>
+          <div class="donut-total-label">sessions</div>
+        </div>
+      </div>
+      <div class="donut-legend">${legend}</div>
+    </div>`;
+}
+
 // ── Rendering ──
 function render() {
   const titles = { dashboard: 'FitTrack', log: 'Log Activity', history: 'History', settings: 'Settings' };
@@ -262,30 +383,6 @@ function renderDashboard() {
   const weekCount = thisWeekCount();
   const monthCount = thisMonthCount();
   const totalDays = new Set(workouts.map(w => w.date)).size;
-
-  // Week strip
-  const now = new Date();
-  const mon = getMonday(now);
-  const weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-  const todayStr = toDateStr(now);
-  const activeDates = new Set(workouts.map(w => w.date));
-
-  let weekStripHtml = '<div class="week-strip">';
-  for (let i = 0; i < 7; i++) {
-    const d = new Date(mon);
-    d.setDate(d.getDate() + i);
-    const ds = toDateStr(d);
-    const isToday = ds === todayStr;
-    const isActive = activeDates.has(ds);
-    const isFuture = ds > todayStr;
-    weekStripHtml += `
-      <div class="week-day ${isActive ? 'active' : ''} ${isToday ? 'today' : ''}" ${isFuture ? 'style="opacity:0.35"' : ''}>
-        <span class="week-day-name">${weekDays[i]}</span>
-        <span class="week-day-num">${d.getDate()}</span>
-        <span class="week-day-dot"></span>
-      </div>`;
-  }
-  weekStripHtml += '</div>';
 
   // Recent
   const recent = [...workouts].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id)).slice(0, 5);
@@ -327,26 +424,46 @@ function renderDashboard() {
       </div>`;
   }
 
-  const breakdownHtml = renderBreakdown();
+  const donutHtml = renderDonutChart();
 
   $main().innerHTML = `
     <div class="fade-in">
       ${installHtml}
-      <div class="stats-grid">
-        <div class="stat-card g-streak"><div class="stat-icon">\u{1F525}</div><div class="stat-value">${streak}</div><div class="stat-label">Day Streak</div></div>
-        <div class="stat-card g-week"><div class="stat-icon">\u{1F4C5}</div><div class="stat-value">${weekCount}/7</div><div class="stat-label">This Week</div></div>
-        <div class="stat-card g-month"><div class="stat-icon">\u{1F4C8}</div><div class="stat-value">${monthCount}</div><div class="stat-label">This Month</div></div>
-        <div class="stat-card g-total"><div class="stat-icon">\u{1F3AF}</div><div class="stat-value">${totalDays}</div><div class="stat-label">Total Days</div></div>
+      <div class="hero-section">
+        ${renderProgressRing(weekCount)}
+        <div class="hero-stats">
+          <div class="hero-stat">
+            <div class="hero-stat-row">
+              <span class="hero-stat-emoji">\u{1F525}</span>
+              <span class="hero-stat-value" style="color:var(--warning)">${streak}</span>
+            </div>
+            <div class="hero-stat-label">Day Streak</div>
+          </div>
+          <div class="hero-stat">
+            <div class="hero-stat-row">
+              <span class="hero-stat-emoji">\u{1F4C8}</span>
+              <span class="hero-stat-value" style="color:var(--success)">${monthCount}</span>
+            </div>
+            <div class="hero-stat-label">This Month</div>
+          </div>
+          <div class="hero-stat">
+            <div class="hero-stat-row">
+              <span class="hero-stat-emoji">\u{1F3AF}</span>
+              <span class="hero-stat-value" style="color:var(--accent)">${totalDays}</span>
+            </div>
+            <div class="hero-stat-label">Total Days</div>
+          </div>
+        </div>
       </div>
       <div class="section">
         <div class="section-title">This Week</div>
-        ${weekStripHtml}
+        ${renderWeeklyBars()}
       </div>
+      ${donutHtml ? `<div class="section"><div class="section-title">Activity Split</div>${donutHtml}</div>` : ''}
       <div class="section">
         <div class="section-title">Consistency</div>
         ${renderCalendar()}
       </div>
-      ${breakdownHtml ? `<div class="section"><div class="section-title">Activity Breakdown</div>${breakdownHtml}</div>` : ''}
       <div class="section">
         <div class="section-title">Recent Activity</div>
         ${recentHtml}
